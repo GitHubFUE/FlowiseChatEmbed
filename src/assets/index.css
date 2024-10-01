@@ -68,9 +68,9 @@ pre {
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */
-.scrollable-container::-webkit-scrollbar {
+/*.scrollable-container::-webkit-scrollbar {
   display: none;
-}
+}*/
 
 /* Hide scrollbar for IE, Edge and Firefox */
 .scrollable-container {
@@ -470,4 +470,5 @@ button {
   max-width: calc(100vw - 20px);
   font-size: var(--tooltip-font-size, 12px);
   transition: opacity 0.3s ease-in-out;
+  font-family: Helvetica;
 }
