@@ -13,19 +13,28 @@ import { GuestBubble } from './bubbles/GuestBubble';
 import { BotBubble } from './bubbles/BotBubble';
 import { LoadingBubble } from './bubbles/LoadingBubble';
 import { StarterPromptBubble } from './bubbles/StarterPromptBubble';
-import { BotMessageTheme, FooterTheme, TextInputTheme, UserMessageTheme, FeedbackTheme, DisclaimerPopUpTheme } from '@/features/bubble/types';
+import {
+  BotMessageTheme,
+  FooterTheme,
+  TextInputTheme,
+  UserMessageTheme,
+  FeedbackTheme,
+  DisclaimerPopUpTheme,
+  DateTimeToggleTheme,
+} from '@/features/bubble/types';
 import { Badge } from './Badge';
 import { Popup, DisclaimerPopup } from '@/features/popup';
 import { Avatar } from '@/components/avatars/Avatar';
 import { DeleteButton, SendButton } from '@/components/buttons/SendButton';
 import { FilePreview } from '@/components/inputs/textInput/components/FilePreview';
-import { CircleDotIcon, TrashIcon } from './icons';
+import { CircleDotIcon, SparklesIcon, TrashIcon } from './icons';
 import { CancelButton } from './buttons/CancelButton';
 import { cancelAudioRecording, startAudioRecording, stopAudioRecording } from '@/utils/audioRecording';
 import { LeadCaptureBubble } from '@/components/bubbles/LeadCaptureBubble';
 import { removeLocalStorageChatHistory, getLocalStorageChatflow, setLocalStorageChatflow, setCookie, getCookie } from '@/utils';
 import { cloneDeep } from 'lodash';
-import { fetchEventSource } from '@microsoft/fetch-event-source';
+import { FollowUpPromptBubble } from '@/components/bubbles/FollowUpPromptBubble';
+import { fetchEventSource, EventStreamContentType } from '@microsoft/fetch-event-source';
 
 export type FileEvent<T = EventTarget> = {
   target: T;
@@ -99,6 +108,8 @@ export type MessageType = {
   action?: IAction | null;
   rating?: FeedbackRatingType;
   id?: string;
+  followUpPrompts?: string;
+  dateTime?: string;
 };
 
 type observerConfigType = (accessor: string | boolean | object | MessageType[]) => void;
@@ -132,6 +143,7 @@ export type BotProps = {
   starterPromptFontSize?: number;
   clearChatOnReload?: boolean;
   disclaimer?: DisclaimerPopUpTheme;
+  dateTimeToggle?: DateTimeToggleTheme;
 };
 
 export type LeadsConfig = {
@@ -269,6 +281,10 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
   const [recordingNotSupported, setRecordingNotSupported] = createSignal(false);
   const [isLoadingRecording, setIsLoadingRecording] = createSignal(false);
 
+  // follow-up prompts
+  const [followUpPromptsStatus, setFollowUpPromptsStatus] = createSignal<boolean>(false);
+  const [followUpPrompts, setFollowUpPrompts] = createSignal<string[]>([]);
+
   // drag & drop
   const [isDragActive, setIsDragActive] = createSignal(false);
   const [uploadedFiles, setUploadedFiles] = createSignal<File[]>([]);
@@ -347,6 +363,7 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
       if (!text) return allMessages;
       allMessages[allMessages.length - 1].message += text;
       allMessages[allMessages.length - 1].rating = undefined;
+      allMessages[allMessages.length - 1].dateTime = new Date().toISOString();
       if (!hasSoundPlayed) {
         playReceiveSound();
         hasSoundPlayed = true;
@@ -462,6 +479,11 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
     handleSubmit(prompt);
   };
 
+  const followUpPromptClick = (prompt: string) => {
+    setFollowUpPrompts([]);
+    handleSubmit(prompt);
+  };
+
   const updateMetadata = (data: any, input: string) => {
     if (data.chatId) {
       setChatId(data.chatId);
@@ -490,6 +512,17 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
         return allMessages;
       });
     }
+
+    if (data.followUpPrompts) {
+      setMessages((prevMessages) => {
+        const allMessages = [...cloneDeep(prevMessages)];
+        if (allMessages[allMessages.length - 1].type === 'userMessage') return allMessages;
+        allMessages[allMessages.length - 1].followUpPrompts = data.followUpPrompts;
+        addChatMessage(allMessages);
+        return allMessages;
+      });
+      setFollowUpPrompts(JSON.parse(data.followUpPrompts));
+    }
   };
 
   const fetchResponseFromEventStream = async (chatflowid: string, params: any) => {
@@ -502,6 +535,17 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
       body: JSON.stringify(params),
       headers: {
         'Content-Type': 'application/json',
+      },
+      async onopen(response) {
+        if (response.ok && response.headers.get('content-type') === EventStreamContentType) {
+          return; // everything's good
+        } else if (response.status === 429) {
+          const errMessage = await response.text() ?? 'Too many requests. Please try again later.';
+          handleError(errMessage);
+          throw new Error(errMessage);
+        } else {
+          throw new Error();
+        }
       },
       async onmessage(ev) {
         const payload = JSON.parse(ev.data);
@@ -680,6 +724,7 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
             artifacts: data?.artifacts,
             type: 'apiMessage' as messageType,
             feedback: null,
+            dateTime: new Date().toISOString(),
           };
           allMessages.push(newMessage);
           addChatMessage(allMessages);
@@ -830,6 +875,7 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
                 message: message.message,
                 type: message.type,
                 rating: message.rating,
+                dateTime: message.dateTime,
               };
               if (message.sourceDocuments) chatHistory.sourceDocuments = message.sourceDocuments;
               if (message.fileAnnotations) chatHistory.fileAnnotations = message.fileAnnotations;
@@ -837,6 +883,7 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
               if (message.agentReasoning) chatHistory.agentReasoning = message.agentReasoning;
               if (message.action) chatHistory.action = message.action;
               if (message.artifacts) chatHistory.artifacts = message.artifacts;
+              if (message.followUpPrompts) chatHistory.followUpPrompts = message.followUpPrompts;
               return chatHistory;
             })
           : [{ message: props.welcomeMessage ?? defaultWelcomeMessage, type: 'apiMessage' }];
@@ -885,6 +932,9 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
           setMessages((prevMessages) => [...prevMessages, { message: '', type: 'leadCaptureMessage' }]);
         }
       }
+      if (chatbotConfig.followUpPrompts) {
+        setFollowUpPromptsStatus(chatbotConfig.followUpPrompts.status);
+      }
     }
 
     // eslint-disable-next-line solid/reactivity
@@ -899,6 +949,17 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
         },
       ]);
     };
+  });
+
+  createEffect(() => {
+    if (followUpPromptsStatus() && messages().length > 0) {
+      const lastMessage = messages()[messages().length - 1];
+      if (lastMessage.type === 'apiMessage' && lastMessage.followUpPrompts) {
+        setFollowUpPrompts(JSON.parse(lastMessage.followUpPrompts));
+      } else if (lastMessage.type === 'userMessage') {
+        setFollowUpPrompts([]);
+      }
+    }
   });
 
   const addRecordingToPreviews = (blob: Blob) => {
@@ -1299,6 +1360,7 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
                           setSourcePopupSrc(sourceDocuments);
                           setSourcePopupOpen(true);
                         }}
+                        dateTimeToggle={props.dateTimeToggle}
                       />
                     )}
                     {message.type === 'leadCaptureMessage' && leadsConfig()?.status && !getLocalStorageChatflow(props.chatflowid)?.lead && (
@@ -1339,6 +1401,27 @@ export const Bot = (botProps: BotProps & { class?: string }) => {
                   )}
                 </For>
               </div>
+            </Show>
+          </Show>
+          <Show when={messages().length > 2 && followUpPromptsStatus()}>
+            <Show when={followUpPrompts().length > 0}>
+              <>
+                <div class="flex items-center gap-1 px-5">
+                  <SparklesIcon class="w-4 h-4" />
+                  <span class="text-sm text-gray-700">Try these prompts</span>
+                </div>
+                <div class="w-full flex flex-row flex-wrap px-5 py-[10px] gap-2">
+                  <For each={[...followUpPrompts()]}>
+                    {(prompt, index) => (
+                      <FollowUpPromptBubble
+                        prompt={prompt}
+                        onPromptClick={() => followUpPromptClick(prompt)}
+                        starterPromptFontSize={botProps.starterPromptFontSize} // Pass it here as a number
+                      />
+                    )}
+                  </For>
+                </div>
+              </>
             </Show>
           </Show>
           <Show when={previews().length > 0}>
